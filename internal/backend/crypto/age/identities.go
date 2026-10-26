@@ -18,6 +18,7 @@ import (
 	"github.com/gopasspw/gopass/internal/backend/crypto/age/identityfile"
 	"github.com/gopasspw/gopass/pkg/appdir"
 	"github.com/gopasspw/gopass/pkg/debug"
+	"golang.org/x/crypto/ssh"
 )
 
 var idRecpCacheKey = "identity"
@@ -283,29 +284,54 @@ func (a *Age) ListIdentities(ctx context.Context) ([]string, error) {
 	return idStr, nil
 }
 
-// FindIdentities returns all usable identities (native only).
+// FindIdentities returns those of keys that a usable identity can decrypt for: a native age
+// identity, or - unless the context asks for native only - an SSH key gopass loads (age.sshkeys,
+// age.ssh-key-path). Without the SSH keys, a store whose only recipient is an SSH key could never
+// be initialized, although Decrypt already uses SSH identities.
 func (a *Age) FindIdentities(ctx context.Context, keys ...string) ([]string, error) {
 	ids, err := a.IdentityRecipients(ctx)
 	if err != nil {
 		return nil, err
 	}
-	matches := make([]string, 0, len(ids))
-OUTER:
-	for _, k := range keys {
-		for _, r := range recipientsToString(ids) {
-			if r == k {
-				matches = append(matches, k)
-				debug.Log("found matching recipient %s", k)
-
-				continue OUTER
-			}
+	usable := make(map[string]bool, len(ids))
+	for _, r := range recipientsToString(ids) {
+		usable[r] = true
+	}
+	if !IsOnlyNative(ctx) {
+		sshIDs, err := a.getSSHIdentities(ctx)
+		if err != nil && !errors.Is(err, ErrNoSSHDir) {
+			return nil, err
 		}
-		debug.Log("%s not found in %q", k, ids)
+		for r := range sshIDs {
+			usable[r] = true
+		}
+	}
+
+	matches := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if usable[k] || usable[canonicalSSHRecipient(k)] {
+			matches = append(matches, k)
+			debug.Log("found matching recipient %s", k)
+
+			continue
+		}
+		debug.Log("%s not found in %d usable identities", k, len(usable))
 	}
 
 	sort.Strings(matches)
 
 	return matches, nil
+}
+
+// canonicalSSHRecipient is an SSH public key as getSSHIdentities keys it - type and key, without
+// the comment an authorized_keys line carries. Anything that isn't an SSH key is returned as is.
+func canonicalSSHRecipient(k string) string {
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(k)) //nolint:dogsled
+	if err != nil {
+		return k
+	}
+
+	return strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(pub)), "\n")
 }
 
 func (a *Age) cachedIDRecipients() []age.Recipient {

@@ -134,7 +134,9 @@ func (a *Age) getSSHIdentities(ctx context.Context) (map[string]age.Identity, er
 		}
 	}
 
-	if len(sshDirs) < 1 {
+	// A custom key file alone (age.ssh-key-path naming one key, with age.sshkeys off) is enough:
+	// only give up when there's neither a directory to search nor a key already found.
+	if len(sshDirs) < 1 && len(ids) == 0 {
 		return nil, fmt.Errorf("no SSH identities found: %w", ErrNoSSHDir)
 	}
 
