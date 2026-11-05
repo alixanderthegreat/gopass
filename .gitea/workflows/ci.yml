@@ -15,15 +15,17 @@ jobs:
           mkdir -p /tmp/src && tar -xzf /tmp/src.tar.gz -C /tmp/src --strip-components=1
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: vet, build and test
-        # The git tests commit, so git needs an identity. TestGitBackendFromEnvOrConfig fails on
-        # upstream's master as of 8b7c43e (2026-10-21) too, not on our change: skipped until a sync
-        # with upstream brings its fix - then drop the -skip.
-        env:
-          GIT_AUTHOR_NAME: ci
-          GIT_AUTHOR_EMAIL: ci@example.invalid
-          GIT_COMMITTER_NAME: ci
-          GIT_COMMITTER_EMAIL: ci@example.invalid
+      - name: vet, build and test, as an ordinary user
+        # Three tests (TestIsUpdateable, TestCopyFile, TestShred) expect "permission denied", which
+        # root never gets: the job runs them as a user. The git tests commit, so git needs an
+        # identity. Skipped: TestGitBackendFromEnvOrConfig fails on upstream's master as of 8b7c43e
+        # (2026-10-21) too - drop it after a sync with upstream brings its fix; TestGetFingerprintV5
+        # needs a gpg that reads v5 keys, newer than the runner's.
         run: |
-          cd /tmp/src
-          go vet ./... && go build ./... && go test -count=1 -skip 'TestGitBackendFromEnvOrConfig' ./...
+          useradd -m ci
+          chown -R ci /tmp/src
+          runuser -u ci -- env HOME=/home/ci PATH="$PATH" \
+            GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@example.invalid \
+            GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@example.invalid \
+            sh -c 'cd /tmp/src && go vet ./... && go build ./... &&
+              go test -count=1 -skip "TestGitBackendFromEnvOrConfig|TestGetFingerprintV5" ./...'
